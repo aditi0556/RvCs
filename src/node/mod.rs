@@ -3,7 +3,7 @@ pub mod event_loop;
 pub mod state;
 pub mod protocol;
 pub mod command;
-pub mod service_start;
+pub mod get_refs;
 use tokio::sync::mpsc::Sender;
 use libp2p::{
     PeerId,
@@ -21,7 +21,9 @@ use state::AppState;
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
-use crate::node::command::Command;
+use crate::node::{
+    command::Command
+};
 
 pub async fn start_node(port: u16) {
     let key = identity::Keypair::generate_ed25519();
@@ -57,7 +59,7 @@ pub async fn start_node(port: u16) {
         .unwrap();
     swarm.listen_on(addr).unwrap();
     println!("Listening on port {}", port);
-
+    //here this default() creates a new and empty state
     let state = Arc::new(Mutex::new(AppState::default()));
 
     let (tx, rx) = mpsc::channel(32);
@@ -65,18 +67,8 @@ pub async fn start_node(port: u16) {
     // spawn event loop
     let state_clone = state.clone();
     tokio::spawn(async move {
-        crate::node::event_loop::run_event_loop(swarm, state_clone, rx).await;
+        crate::node::event_loop::create_event_loop(swarm, state_clone, rx).await;
     });
-
-//     let tx_clone = tx.clone();
-
-//     tokio::spawn(async move {
-//     loop {
-//         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-//         tx_clone.send(Command::Heartbeat).await.unwrap();
-//     }
-// });
-
     // cli loop
     cli_loop(tx).await;
 }
@@ -89,6 +81,7 @@ async fn cli_loop(tx: Sender<Command>) {
 
     println!("Commands: rvcd discover");
     println!("Commands: rvcd join peerID multiaddr");
+    println!("Commands: rvcd branches <branchID>");
 
   while let Ok(Some(line)) = lines.next_line().await {
     let parts: Vec<&str> = line.trim().split_whitespace().collect();
@@ -107,6 +100,23 @@ async fn cli_loop(tx: Sender<Command>) {
             match parts[1] {
                 "discover" => {
                     tx.send(Command::Discover).await.unwrap();
+                }
+
+                "branches" => {
+                    if parts.len() != 3 {
+                        println!("Usage: rvcd branches <peer_id>");
+                        continue;
+                    }
+
+                    let peer: PeerId = match parts[2].parse() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            println!("Invalid peer_id");
+                            continue;
+                        }
+                    };
+
+                    tx.send(Command::Branches { peer }).await.unwrap();
                 }
 
                 "dial" => {
