@@ -1,9 +1,7 @@
-use libp2p::{PeerId,Multiaddr};
+use libp2p::{Multiaddr, PeerId};
 
 pub enum Command {
-    Discover, 
-    Dial {
-        peer:PeerId,addr:Multiaddr,
-    }
-    // SendMessage { peer: PeerId, data: Vec<u8> },
+    Discover,
+    Dial { peer: PeerId, addr: Multiaddr },
+    Branches { peer: PeerId }, // SendMessage { peer: PeerId, data: Vec<u8> },
 }

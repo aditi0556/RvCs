@@ -28,7 +28,7 @@ pub fn commit_tree(args: Vec<String>) -> Result<String, GitError> {
     git_object.write()?;
     let hash = git_object.hex_string();
     //update the refs/head/main
-    update_head(&hash).map_err(|e| GitError::any())
+    update_head(&hash).map_err(|e| GitError::any("failed to update head"));
     println!("Commited : {}", git_object.hex_string());
     Ok(hash)
 }
