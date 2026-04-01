@@ -34,4 +34,5 @@ if-addrs = "0.15.0"
 simple-mdns = { version = "0.6", features = ["sync"] }
 searchlight = "0.3.2"
 local-ip-address = "0.6.10"
+base64 = "0.22.1"
 

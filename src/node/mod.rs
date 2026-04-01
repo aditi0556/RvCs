@@ -3,6 +3,7 @@ pub mod event_loop;
 pub mod state;
 pub mod protocol;
 pub mod command;
+pub mod merge;
 pub mod get_refs;
 use tokio::sync::mpsc::Sender;
 use libp2p::{
@@ -100,6 +101,22 @@ async fn cli_loop(tx: Sender<Command>) {
             match parts[1] {
                 "discover" => {
                     tx.send(Command::Discover).await.unwrap();
+                }
+
+                "merge"=>{
+                    if parts.len() != 4{
+                        println!("Usage: rvcd merge <peerId> <branchName>");
+                        continue;
+                    }
+                    let peer: PeerId = match parts[2].parse() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            println!("Invalid peer_id");
+                            continue;
+                        }
+                    };
+                    let branch= parts[3].to_string();
+                    tx.send(Command::Branches { peer,branch });
                 }
 
                 "branches" => {
