@@ -4,6 +4,8 @@ use crate::node::{
     get_refs::get_refs,
     protocol::{RvcRequest, RvcResponse},
     state::AppState,
+    objects::collect_all_objects,
+    merge,
 };
 use futures::StreamExt;
 use libp2p::{
@@ -13,94 +15,7 @@ use libp2p::{
 };
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::Receiver;
-use std::io::Read;
-use std::collections::HashSet;
-
-//to find the common commit
-pub fn find_common_commit(local: Vec<String>,remote: Vec<String>,) -> Option<String> {
-    let remote_set: HashSet<String> = remote.into_iter().collect();
-    for commit in local {
-        if remote_set.contains(&commit) {
-            return Some(commit);
-        }
-    }
-    None
-}
-
-fn collect_all_objects(hash: &str, out: &mut Vec<String>) {
-    if out.contains(&hash.to_string()) {
-        return;
-    }
-    out.push(hash.to_string());
-
-    let path = format!(".rvc/objects/{}/{}", &hash[..2], &hash[2..]);
-    let Ok(raw) = std::fs::read(&path) else { return };
-
-    // decompress (assuming zlib like git)
-    let Ok(decompressed) = decompress_zlib(&raw) else { return };
-
-    // object header format: "<type> <size>\0<content>"
-    let Some(null_pos) = decompressed.iter().position(|&b| b == 0) else { return };
-    let header = &decompressed[..null_pos];
-    let content = &decompressed[null_pos + 1..];
-
-    let Ok(header_str) = std::str::from_utf8(header) else { return };
-
-    if header_str.starts_with("commit") {
-        // commit content is text: find "tree <hash>\n"
-        let Ok(text) = std::str::from_utf8(content) else { return };
-        for line in text.lines() {
-            if line.starts_with("tree ") {
-                let tree_hash = line[5..].trim();
-                collect_all_objects(tree_hash, out);
-            }
-            else if line.starts_with("parent ") {
-                let parent_hash = line[7..].trim();
-                collect_all_objects(parent_hash, out);
-            }
-            // stop at blank line (start of commit message)
-            if line.is_empty() { break; }
-        }
-    } else if header_str.starts_with("tree") {
-        // binary format: "<mode> <filename>\0<20 raw bytes>"
-        let mut cursor = std::io::Cursor::new(content);
-        loop {
-            let mut mode = Vec::new();
-            let mut filename = Vec::new();
-            let mut raw_hash = vec![0u8; 20];
-
-            use std::io::BufRead;
-            if cursor.read_until(b' ', &mut mode).unwrap_or(0) == 0 { break; }
-            if cursor.read_until(b'\0', &mut filename).unwrap_or(0) == 0 { break; }
-            if cursor.read_exact(&mut raw_hash).is_err() { break; }
-
-            // convert 20 raw bytes → 40 char hex string
-            let entry_hash = raw_hash.iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>();
-
-            mode.pop(); // remove trailing space
-            let Ok(mode_str) = std::str::from_utf8(&mode) else { break };
-
-            match mode_str {
-                "40000" => {
-                    // subtree — recurse
-                    collect_all_objects(&entry_hash, out);
-                }
-                "100644" | "100755" | "120000" => {
-                    // blob — just add the hash, no need to recurse
-                    if !out.contains(&entry_hash) {
-                        out.push(entry_hash);
-                    }
-                }
-                _ => {}
-            }
-
-            if cursor.position() as usize >= content.len() { break; }
-        }
-    }
-    // blobs: no children to walk
-}
+use crate::command::refs;
 
 pub fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     use flate2::read::ZlibDecoder;
@@ -112,16 +27,21 @@ pub fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error
 }
 
 //here the missing commits is stored such that the first commit is the latest commit
-pub fn get_missing_commits(commits: Vec<String>,base: &str,) -> Vec<String> {
+pub fn get_missing_commits(local_commits: &[String], lca: &str) -> Vec<String> {
     let mut result = Vec::new();
-    for commit in commits {
-        if commit == base {
+    let mut found = false;
+    for commit in local_commits {
+        if commit == lca {
+            found = true;
             break;
         }
-        result.push(commit);
+        result.push(commit.clone());
     }
-    result
-} 
+    if !found {
+        println!("Warning: LCA {} not found in remote commit list", &lca[..7]);
+    }
+    result // newest-first, so result[0] is B's HEAD
+}
 
 pub async fn create_event_loop(mut swarm: Swarm<RvcBehaviour>,state: Arc<Mutex<AppState>>,mut rx: Receiver<Command>,) {
     loop {
@@ -157,8 +77,17 @@ pub async fn create_event_loop(mut swarm: Swarm<RvcBehaviour>,state: Arc<Mutex<A
                     }
                     Command::Merge{ peer, branch } => {
                         println!("Merging branch {} with {}", branch, peer);
-                        let commits = crate::node::get_refs::get_all_commits_of_branch(&branch); 
-                        let payload = format!("SYNC_REQ|{}|{}",branch,commits.join(","));
+                        let local_branch = refs::get_current_branch().unwrap_or("detached".to_string());
+                        println!("Current branch here is {}",local_branch);
+                        let local_commits = crate::node::get_refs::get_all_commits_of_branch(&local_branch);
+                        let payload = format!("SYNC_REQ|{}|{}",branch,local_commits.join(","));
+                        {
+                            let mut st = state.lock().unwrap();
+                            st.pending_fetch = Some(crate::node::state::PendingFetch{
+                                                 branch:local_branch.clone(),
+                                                 remote_head: String::new(),
+                                                });
+                        }
                         swarm.behaviour_mut().req_res.send_request(&peer,RvcRequest(payload.into_bytes()));
                     }
                 }
@@ -177,6 +106,10 @@ pub async fn create_event_loop(mut swarm: Swarm<RvcBehaviour>,state: Arc<Mutex<A
                             &peer_id,
                             RvcRequest(b"GET_PEERS".to_vec())
                         );
+                    }
+
+                    SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                        println!("Disconnected from {} cause: {:?}", peer_id, cause);
                     }
 
                     // add peers here (if missing)
@@ -257,40 +190,75 @@ pub async fn create_event_loop(mut swarm: Swarm<RvcBehaviour>,state: Arc<Mutex<A
 
                                     // -------- SYNC_REQ --------
                                     else if req.starts_with("SYNC_REQ|") {
-                                        let parts: Vec<&str> = req.split('|').collect();
+                                        println!("Got the request, SYNC_REQ");
+                                        
+                                        let parts: Vec<&str> = req.splitn(3, '|').collect();  // ← FIX: splitn(3) not split
+                                        println!("Parts count: {}", parts.len());
+                                        
+                                        if parts.len() < 3 {
+                                            println!("ERROR: SYNC_REQ malformed, only {} parts", parts.len());
+                                            return;
+                                        }
+                                        
                                         let branch = parts[1].to_string();
+                                        println!("Branch name is {}", branch);
+                                        
                                         let remote_commits: Vec<String> = parts[2]
                                             .split(',')
+                                            .filter(|s| !s.is_empty())
                                             .map(|s| s.to_string())
                                             .collect();
-                                        let local_commits = crate::node::get_refs::get_all_commits_of_branch(&branch);
-                                        let common = find_common_commit(local_commits.clone(), remote_commits);
-                                        let missing = if let Some(base) = common {
-                                            get_missing_commits(local_commits, &base)
+                                        println!("Received {} remote commits from peer A", remote_commits.len());
+                                        
+                                        let head = crate::node::get_refs::read_ref(&branch);
+                                        println!("Local HEAD for branch '{}': '{}'", branch, head);
+                                        
+                                        if head.is_empty() {
+                                            println!("Branch '{}' not found locally — will send all commits", branch);
+                                        }
+                                        
+                                        let common = if head.is_empty() {
+                                            None
                                         } else {
+                                            let lca = crate::node::get_refs::find_lca(head.as_str(), &remote_commits);
+                                            println!("LCA result: {:?}", lca.as_deref().map(|h| &h[..7.min(h.len())]));
+                                            lca
+                                        };
+
+                                        let local_commits = crate::node::get_refs::get_all_commits_of_branch(&branch);
+                                        println!("Local commits count: {}", local_commits.len());
+
+                                        let missing = if let Some(ref base) = common {
+                                            println!("Common base found: {}", &base[..7.min(base.len())]);
+                                            get_missing_commits(&local_commits, base)
+                                        } else {
+                                            println!("No common base — sending all {} local commits", local_commits.len());
                                             local_commits
                                         };
-                                        let response = format!("SYNC_RES|{}|{}",branch,missing.join(","));
-                                        //send these commits to the requesting peer 
-                                        swarm.behaviour_mut()
+                                        
+                                        println!("Sending {} missing commits in SYNC_RES", missing.len());
+                                        
+                                        let response = format!("SYNC_RES|{}|{}", branch, missing.join(","));
+                                        println!("Response size: {} bytes", response.len());
+                                        
+                                        match swarm.behaviour_mut()
                                             .req_res
                                             .send_response(channel, RvcResponse(response.into_bytes()))
-                                            .unwrap();
+                                        {
+                                            Ok(_)  => println!("SYNC_RES sent successfully"),
+                                            Err(e) => println!("ERROR sending SYNC_RES: {:?}", e),
+                                        }
                                     }
-
                                     // -------- GET_OBJS --------
-                                    else if req.starts_with("GET_OBJS|") {
-                                        let parts: Vec<&str> = req.split('|').collect();
+                                     else if req.starts_with("GET_OBJS|") {
+                                        println!("Got the GET_OBJS");
+                                        let parts: Vec<&str> = req.splitn(3, '|').collect();
                                         if parts.len() < 3 {
-                                            println!("Invalid GET_OBJS request");
+                                            println!("Invalid GET_OBJS");
                                         } else {
                                             let branch = parts[1];
-                                            let requested: Vec<String> = parts[2]
-                                                .split(',')
-                                                .map(|s| s.to_string())
-                                                .collect();
+                                            let requested: Vec<String> = parts[2].split(',').map(|s| s.to_string()).collect();
 
-                                            // Expand each commit hash → tree → blobs recursively
                                             let mut all_hashes: Vec<String> = Vec::new();
                                             for hash in &requested {
                                                 collect_all_objects(hash, &mut all_hashes);
@@ -299,23 +267,18 @@ pub async fn create_event_loop(mut swarm: Swarm<RvcBehaviour>,state: Arc<Mutex<A
 
                                             let mut result = Vec::new();
                                             for hash in all_hashes {
-                                                let path = format!(".rvc/objects/{}/{}", &hash[..2], &hash[2..]);
+                                                let path = format!(".git/objects/{}/{}", &hash[..2], &hash[2..]);
                                                 match std::fs::read(&path) {
-                                                    Ok(data) => {
-                                                        let encoded = base64::encode(&data);
-                                                        result.push(format!("{}:{}", hash, encoded));
-                                                    }
-                                                    Err(_) => println!("Missing object {}", hash),
+                                                    Ok(data) => result.push(format!("{}:{}", hash, base64::encode(&data))),
+                                                    Err(_)   => println!("Missing object {}", hash),
                                                 }
                                             }
-                                            let response = format!("OBJS|{}|{}",branch, result.join(","));
-                                            swarm.behaviour_mut()
-                                                .req_res
+                                            let response = format!("OBJS|{}|{}", branch, result.join(","));
+                                            swarm.behaviour_mut().req_res
                                                 .send_response(channel, RvcResponse(response.into_bytes()))
                                                 .unwrap();
                                         }
                                     }
-                                
                                 }
                                 // response received
                                 Message::Response { response, .. } => {
@@ -363,39 +326,52 @@ pub async fn create_event_loop(mut swarm: Swarm<RvcBehaviour>,state: Arc<Mutex<A
                                     }
                                     //-------SYNC_RES-----------
                                     else if data.starts_with("SYNC_RES|") {
+                                        println!("Got SYNC_RES");
                                         let parts: Vec<&str> = data.split('|').collect();
-                                        let branch = parts[1].to_string();
+                                        // let branch = parts[1].to_string();
                                         let missing: Vec<String> = if parts.len() > 2 && !parts[2].is_empty() {
                                             parts[2].split(',').map(|s| s.to_string()).collect()
                                         } else {
                                             vec![]
                                         };
+
+                                        //this gives the HEAD commit of the remote peer
                                         println!("Missing commits: {:?}", missing);
                                         if !missing.is_empty() {
+                                            let remote_head = missing[0].clone();
+                                            {
+                                                let mut st = state.lock().unwrap();
+                                                if let Some(ref mut fetch) = st.pending_fetch{
+                                                    fetch.remote_head = remote_head.clone();
+                                                }
+                                            }
+                                            let branch = {
+                                                state.lock().unwrap()
+                                                    .pending_fetch
+                                                    .as_ref()
+                                                    .map(|f| f.branch.clone())
+                                                    .unwrap_or_default()
+                                            };
                                             let req = format!("GET_OBJS|{}|{}",branch, missing.join(","));
                                             swarm.behaviour_mut().req_res.send_request(&peer,RvcRequest(req.into_bytes()));
                                         }
+
                                     }
                                     
+                                    // ── OBJS | branch | hash:b64,hash:b64,... ──
+                                    // Peer receives objects, writes to disk, triggers merge
                                     else if data.starts_with("OBJS|") {
-                                        let payload = &data["OBJS|".len()..];
-                                        let mut parts = payload.splitn(2, '|');
-                                        let Some(branch) = parts.next() else { return };
-                                        let Some(objects_str) = parts.next() else { return };
-                                        let mut first_commit:Option<String>=None;
-                                        // write every object to disk
-                                        for entry in payload.split(',') {
+                                        println!("Got the OBJS repsosne");
+                                        let parts: Vec<&str> = data.splitn(3, '|').collect();
+                                        if parts.len() < 3 { return; }
+                                        let objects_str = parts[2];
+
+                                        // write all objects to disk first
+                                        for entry in objects_str.split(',') {
                                             let mut iter = entry.splitn(2, ':');
                                             let (Some(hash), Some(b64)) = (iter.next(), iter.next()) else { continue };
-                                            let Ok(bytes) = base64::decode(b64) else {
-                                                println!("Failed to decode object {}", hash);
-                                                continue;
-                                            };
-                                            if first_commit.is_none() {
-                                               first_commit = Some(hash.to_string());
-                                            }
-                                            //now write it to the objects
-                                            let dir  = format!(".rvc/objects/{}", &hash[..2]);
+                                            let Ok(bytes) = base64::decode(b64) else { continue };
+                                            let dir  = format!(".git/objects/{}", &hash[..2]);
                                             let file = format!("{}/{}", dir, &hash[2..]);
                                             if !std::path::Path::new(&file).exists() {
                                                 std::fs::create_dir_all(&dir).ok();
@@ -404,32 +380,12 @@ pub async fn create_event_loop(mut swarm: Swarm<RvcBehaviour>,state: Arc<Mutex<A
                                             }
                                         }
 
-                                        if let Some(latest) = first_commit {
-                                            // directly update .rvc/refs/remotes/<peer>/<branch>
-                                            let remote_dir = format!(".rvc/refs/remotes/{peer}", peer = "peer_placeholder"); 
-                                            std::fs::create_dir_all(&remote_dir).ok();
-                                            let ref_file = format!("{}/{}", remote_dir, branch);
-                                            std::fs::write(&ref_file, latest.as_bytes()).ok();
-                                            println!("Updated remote branch {} → {}", branch, latest);
+                                        // retrieve pending fetch info and merge
+                                        let pending = state.lock().unwrap().pending_fetch.take();
+                                        if let Some(fetch) = pending {
+                                            println!("Merging now!!!");
+                                            merge::merge_branch(&fetch.branch, &fetch.remote_head);
                                         }
-
-                                        // now trigger merge using the stored pending_fetch
-                                        // let pending = {
-                                        //     let mut st = state.lock().unwrap();
-                                        //     st.pending_fetch.take()  // take clears it from state
-                                        // };
-
-                                        // if let Some(fetch) = pending {
-                                        //     let conflicts = merge_branch(&fetch.branch, &fetch.remote_head);
-                                        //     if conflicts.is_empty() {
-                                        //         println!("Merge complete.");
-                                        //     } else {
-                                        //         println!("Merge has {} conflict(s) — resolve manually:", conflicts.len());
-                                        //         for f in conflicts {
-                                        //             println!("  CONFLICT: {}", f);
-                                        //         }
-                                        //     }
-                                        // }
                                     }
                                     
                                     else {

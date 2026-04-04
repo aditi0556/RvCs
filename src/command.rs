@@ -5,6 +5,7 @@ pub mod commit_tree;
 pub mod hash_objects;
 pub mod init;
 pub mod ls_trees;
+pub mod add;
 pub mod refs;
 pub mod update_head;
 pub mod write_tree;

@@ -25,6 +25,11 @@ pub enum Commands {
         message: String,
     },
 
+    Add{
+        #[arg()]
+        path:Vec<String>,
+    },
+
     Clone {
         repo: String,
     },
@@ -43,6 +48,7 @@ pub enum Commands {
     CreateBranch {
         name:String,
     },
+    CurrentBranch {},
     SwitchBranch{
         name:String,
     },

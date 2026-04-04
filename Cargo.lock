@@ -392,33 +392,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "codecrafters-git"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64",
- "bytes",
- "clap",
- "flate2",
- "futures",
- "hex",
- "hostname",
- "if-addrs 0.15.0",
- "libp2p",
- "local-ip-address",
- "mdns-sd",
- "once_cell",
- "reqwest",
- "searchlight",
- "sha1",
- "simple-mdns",
- "thiserror 1.0.69",
- "tokio",
- "url",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2996,6 +2969,33 @@ name = "rustversion"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+
+[[package]]
+name = "rvc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "bytes",
+ "clap",
+ "flate2",
+ "futures",
+ "hex",
+ "hostname",
+ "if-addrs 0.15.0",
+ "libp2p",
+ "local-ip-address",
+ "mdns-sd",
+ "once_cell",
+ "reqwest",
+ "searchlight",
+ "sha1",
+ "simple-mdns",
+ "thiserror 1.0.69",
+ "tokio",
+ "url",
+]
 
 [[package]]
 name = "rw-stream-sink"

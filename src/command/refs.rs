@@ -3,12 +3,12 @@ use std::path::Path;
 
 /// Resolve HEAD → actual commit hash
 pub fn get_head_commit() -> Option<String> {
-    let head = fs::read_to_string(".rvc/HEAD").ok()?;
+    let head = fs::read_to_string(".git/HEAD").ok()?;
 
     // symbolic ref
     if let Some(ref_path) = head.strip_prefix("ref: ") {
         let ref_path = ref_path.trim();
-        let commit = fs::read_to_string(format!(".rvc/{}", ref_path)).ok()?;
+        let commit = fs::read_to_string(format!(".git/{}", ref_path)).ok()?;
         return Some(commit.trim().to_string());
     }
 
@@ -17,16 +17,16 @@ pub fn get_head_commit() -> Option<String> {
 }
 
 /// Update remote ref for a peer
-pub fn update_remote_ref(peer_id: &str, hash: &str) {
-    let dir = ".rvc/refs/remotes/";
-    fs::create_dir_all(dir).unwrap();
-    let path = format!("{}/{}", dir, peer_id);
-    fs::write(path, hash).unwrap();
-}
+// pub fn update_remote_ref(peer_id: &str, hash: &str) {
+//     let dir = ".git/refs/remotes/";
+//     fs::create_dir_all(dir).unwrap();
+//     let path = format!("{}/{}", dir, peer_id);
+//     fs::write(path, hash).unwrap();
+// }
 
 /// Create a new branch
 pub fn create_branch(branch_name: &str) -> std::io::Result<()> {
-    let path = format!(".rvc/refs/heads/{}", branch_name);
+    let path = format!(".git/refs/heads/{}", branch_name);
 
     if Path::new(&path).exists() {
         println!("Branch '{}' already exists", branch_name);
@@ -37,14 +37,14 @@ pub fn create_branch(branch_name: &str) -> std::io::Result<()> {
     let commit_hash = get_head_commit()
         .unwrap_or_else(|| "0000000000000000000000000000000000000000".to_string());
 
-    fs::create_dir_all(".rvc/refs/heads")?;
+    fs::create_dir_all(".git/refs/heads")?;
     fs::write(&path, commit_hash)?;
     Ok(())
 }
 
 /// Switch to a branch
 pub fn switch_branch(branch_name: &str) -> std::io::Result<()> {
-    let branch_path = format!(".rvc/refs/heads/{}", branch_name);
+    let branch_path = format!(".git/refs/heads/{}", branch_name);
 
     if !Path::new(&branch_path).exists() {
         return Err(std::io::Error::new(
@@ -55,14 +55,14 @@ pub fn switch_branch(branch_name: &str) -> std::io::Result<()> {
 
     //correct HEAD format
     let head_content = format!("ref: refs/heads/{}", branch_name);
-    fs::write(".rvc/HEAD", head_content)?;
+    fs::write(".git/HEAD", head_content)?;
 
     Ok(())
 }
 
-/// Get current branch
+// Get current branch
 pub fn get_current_branch() -> Option<String> {
-    let content = fs::read_to_string(".rvc/HEAD").ok()?;
+    let content = fs::read_to_string(".git/HEAD").ok()?;
 
     // handle "ref: "
     if let Some(branch) = content.strip_prefix("ref: refs/heads/") {

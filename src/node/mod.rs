@@ -3,6 +3,8 @@ pub mod event_loop;
 pub mod state;
 pub mod protocol;
 pub mod command;
+pub mod objects;
+pub mod diff3;
 pub mod merge;
 pub mod get_refs;
 use tokio::sync::mpsc::Sender;
@@ -19,7 +21,7 @@ use libp2p::{
 use behaviour::RvcBehaviour;
 use state::AppState;
 
-use std::sync::{Arc, Mutex};
+use std::{sync::{Arc, Mutex}, time::Duration};
 
 use tokio::sync::mpsc;
 use crate::node::{
@@ -38,7 +40,7 @@ pub async fn start_node(port: u16) {
     ).unwrap();
 
     let req_res = request_response::Behaviour::new(
-        [(StreamProtocol::new("/rvc/1.0.0"), ProtocolSupport::Full)],
+        [(StreamProtocol::new("/git/1.0.0"), ProtocolSupport::Full)],
         request_response::Config::default(),
     );
 
@@ -50,9 +52,13 @@ pub async fn start_node(port: u16) {
         Default::default(),
         noise::Config::new,
         yamux::Config::default,
-    ).unwrap()
-    .with_behaviour(|_| behaviour)
-    .unwrap()
+    )
+    .expect("tcp transport failed")  // ← unwrap the Result here
+    .with_behaviour(|_| Ok(behaviour))  // ← behaviour also needs to return Result
+    .expect("behaviour failed")
+    .with_swarm_config(|cfg| {
+        cfg.with_idle_connection_timeout(Duration::from_secs(300))
+    })
     .build();
 
     let addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port)
@@ -63,6 +69,8 @@ pub async fn start_node(port: u16) {
     //here this default() creates a new and empty state
     let state = Arc::new(Mutex::new(AppState::default()));
 
+    //Here tx.Send().await returns  Result<>,Err>
+    //Here rx.recv.await returns an Option<T>
     let (tx, rx) = mpsc::channel(32);
 
     // spawn event loop
@@ -94,7 +102,7 @@ async fn cli_loop(tx: Sender<Command>) {
     match parts[0] {
         "rvcd" => {
             if parts.len() < 2 {
-                println!("Usage: rvcd <command>");
+                println!("Usage: gitd <command>");
                 continue;
             }
 
@@ -105,7 +113,7 @@ async fn cli_loop(tx: Sender<Command>) {
 
                 "merge"=>{
                     if parts.len() != 4{
-                        println!("Usage: rvcd merge <peerId> <branchName>");
+                        println!("Usage: gitd merge <peerId> <branchName>");
                         continue;
                     }
                     let peer: PeerId = match parts[2].parse() {
@@ -116,12 +124,12 @@ async fn cli_loop(tx: Sender<Command>) {
                         }
                     };
                     let branch= parts[3].to_string();
-                    tx.send(Command::Branches { peer,branch });
+                    tx.send(Command::Merge { peer, branch }).await.unwrap();
                 }
 
                 "branches" => {
                     if parts.len() != 3 {
-                        println!("Usage: rvcd branches <peer_id>");
+                        println!("Usage: gitd branches <peer_id>");
                         continue;
                     }
 
@@ -138,7 +146,7 @@ async fn cli_loop(tx: Sender<Command>) {
 
                 "dial" => {
                     if parts.len() != 4 {
-                        println!("Usage: rvcd dial <peer_id> <addr>");
+                        println!("Usage: gitd dial <peer_id> <addr>");
                         continue;
                     }
 

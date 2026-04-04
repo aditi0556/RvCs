@@ -17,12 +17,12 @@ pub fn clone(args: Vec<String>) -> Result<(), GitError> {
     let pack_data = git_client.fetch_pack(repo_url, &head_rev)?;
     fs::create_dir(clone_dir)?;
     std::env::set_current_dir(clone_dir)?;
-    fs::create_dir(".rvc")?;
-    fs::create_dir(".rvc/objects")?;
-    fs::create_dir(".rvc/refs")?;
-    fs::create_dir(".rvc/refs/heads")?;
-    fs::write(".rvc/HEAD", "ref: refs/heads/master\n")?;
-    fs::write(".rvc/refs/heads/master", &head_rev)?;
+    fs::create_dir(".git")?;
+    fs::create_dir(".git/objects")?;
+    fs::create_dir(".git/refs")?;
+    fs::create_dir(".git/refs/heads")?;
+    fs::write(".git/HEAD", "ref: refs/heads/master\n")?;
+    fs::write(".git/refs/heads/master", &head_rev)?;
     unpack(pack_data)?;
     let commit = GitObject::from_hex_string(head_rev)?;
     commit.restore(".")?;
@@ -39,7 +39,7 @@ impl GitClient {
     }
     fn get_head_rev(&self, repo_url: impl AsRef<str>) -> Result<String, GitError> {
         let repo_url = repo_url.as_ref();
-        let refs_url = Url::parse(&format!("{repo_url}.rvc/info/refs?service=git-upload-pack"))?;
+        let refs_url = Url::parse(&format!("{repo_url}.git/info/refs?service=git-upload-pack"))?;
         let response = self.inner.get(refs_url).send()?;
         let body = response.bytes()?;
         let head_rev = String::from_utf8_lossy(
@@ -58,7 +58,7 @@ impl GitClient {
     ) -> Result<Vec<u8>, GitError> {
         let repo_url = repo_url.as_ref();
         let rev = rev.as_ref();
-        let pack_url = Url::parse(&format!("{repo_url}.rvc/git-upload-pack"))?;
+        let pack_url = Url::parse(&format!("{repo_url}.git/git-upload-pack"))?;
         let response = self
             .inner
             .post(pack_url)

@@ -53,7 +53,7 @@ pub struct GitObject {
 }
 impl GitObject {
     fn objects_dir_path() -> PathBuf {
-        [".rvc", "objects"].iter().collect::<PathBuf>()
+        [".git", "objects"].iter().collect::<PathBuf>()
     }
     fn committer() -> String {
         "Code Crafters <000000000+codecrafters@users.noreply.github.com> 1750973235 +0000".into()
@@ -162,7 +162,7 @@ impl GitObject {
         //if the path is directory then loop through all the files
         if path.is_dir() {
             //ignore the .rvc folder
-            let ignored = [".rvc"];
+            let ignored = [".git"];
             let mut entries: Vec<_> = fs::read_dir(path)?
                 .filter_map(|entry| {
                     let entry = entry.ok()?;
@@ -233,6 +233,7 @@ impl GitObject {
         fs::write(&path, &compressed_contents)?;
         Ok(())
     }
+   
     pub fn kind(&self) -> &Kind {
         &self.kind
     }
