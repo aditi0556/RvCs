@@ -4,6 +4,7 @@ use crate::command::write_tree::write_tree;
 use crate::error::GitError;
 use crate::command::add;
 use crate::command::refs;
+use std::time::{SystemTime, UNIX_EPOCH};
 use crate::objects;
 pub fn commit(message: String) -> Result<(), GitError> {
 
@@ -76,23 +77,25 @@ pub fn commit(message: String) -> Result<(), GitError> {
             // because build_commit only handles one parent
             let mut contents = String::new();
             use std::fmt::Write;
-
-            let committer = "Code Crafters <000000000+codecrafters@users.noreply.github.com> 1750973235 +0000";
-
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let committer = format!(
+                "Aditi Sinha <aditisinha372@gmail.com> {} +0530",
+                now
+            );
             writeln!(contents, "tree {}", tree_hash)?;
-
             // first parent = our local HEAD
             if let Some(ref p) = local_parent {
                 writeln!(contents, "parent {}", p)?;
             }
             // second parent = the remote HEAD we merged from (MERGE_HEAD)
             writeln!(contents, "parent {}", mh)?;
-
             writeln!(contents, "author {}", committer)?;
             writeln!(contents, "committer {}", committer)?;
             writeln!(contents)?;
             writeln!(contents, "{}", message)?;
-
             let obj = objects::GitObject::build(objects::Kind::Commit, contents.into_bytes())?;
             obj.write()?;
             obj.hex_string()
