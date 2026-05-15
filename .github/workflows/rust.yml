@@ -29,4 +29,4 @@ jobs:
       uses: docker/build-push-action@v4
       with:
         push: true
-        tags: docker push aditi0556/rvcs:latest
+        tags: aditi0556/rvcs:latest
