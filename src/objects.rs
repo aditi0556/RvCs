@@ -56,7 +56,11 @@ impl GitObject {
         [".git", "objects"].iter().collect::<PathBuf>()
     }
     fn committer() -> String {
-        "Code Crafters <000000000+codecrafters@users.noreply.github.com> 1750973235 +0000".into()
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        format!("RVCs User <user@rvcs.local> {} +0000", timestamp)
     }
     pub fn build(kind: Kind, contents: Vec<u8>) -> Result<Self, GitError> {
         let header = {
